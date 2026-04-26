@@ -1,52 +1,25 @@
-I have a small spreadsheet-like graph in `/app`. 
-There is no UI. Each node is either a rational number, a variable, or a math operation.
+Imagine a tiny spreadsheet nobody ever shipped the UI for: a directed acyclic graph where each cell is either a rational constant, a variable, or a small set of operations. Nothing becomes a float—every intermediate stays as an integer numerator over a strictly positive integer denominator, and you are expected to cancel common factors as you go so the numbers stay manageable when the harness throws big graphs at you.
 
-Please write `/app/evaluate.py`.
+You get two JSON files under `/app/`. `graph.json` names a `root` node id and a `nodes` map. Each node has a `kind`:
 
-It should read `/app/graph.json` and `/app/assignment.json`, evaluate the graph root, and write the final answer to `/app/result.json`.
+Constants (`const`) carry integer `num` and `den` with `den > 0`; the pair need not already be reduced, and `num` may be negative. Variables (`var`) carry a `name` string; look it up under `vars` in `assignment.json`, where every binding is again `{"num": ..., "den": ...}` with a positive denominator (also not guaranteed pre-reduced).
 
-All math must stay exact. Do not use floats. 
-Store every value as an integer numerator and a positive integer denominator. 
-Reduce fractions as you go so large hidden tests do not get slow.
+Binary nodes `add`, `sub`, and `mul` point to `left` and `right` child ids. Unary `neg` flips the sign. Unary `inv` takes the reciprocal; inputs are always valid, so you will never invert an expression that evaluates to zero. Unary `abs` sends a rational to its distance from zero on the number line—think `abs(-15/6)` ending up as the reduced `5/2`.
 
-`graph.json` contains the root node id to evaluate and a `nodes` object where each key is a node id.
+`min` and `max` compare two children in the usual order on the rationals. With both denominators positive, compare `n1/d1` and `n2/d2` by cross-multiplying with integers (`n1*d2` versus `n2*d1`) and **do not** cast to float. If the two values tie, you may return either side’s value, but the pair you write must still be the canonical reduced fraction for that rational.
 
-Each node has a `kind`.
+`floor` and `ceil` are unary. They round toward negative or positive infinity, and the answer is always an integer expressed as a reduced rational with denominator `1`—for instance `floor(-7/3)` is `-3` and `ceil(-7/3)` is `-2`. Stay in integer land; if it helps, `ceil(x) = -floor(-x)` is a dependable identity to implement.
 
-A `const` node has `num` and `den`. The denominator is positive, but the fraction may not be reduced. The numerator may be negative.
+The graph may fan back into the same node id from more than one parent. Treat each id as a single memoized value once you know it, or you will redo work exponentially on the hidden stress pattern even though the JSON stays small.
 
-A `var` node has `name`. Look up that name in `assignment.json` under `vars`.
+Ship `/app/evaluate.py` that reads the graph and assignment, evaluates `root`, and writes `/app/result.json` as exactly `{"num": <int>, "den": <int>}`—no extra keys—with `den > 0`, `gcd(abs(num), den) == 1`, and any negative sign carried on `num`.
 
-`add`, `sub`, and `mul` nodes have `left` and `right` child ids.
-
-A `neg` node has `child` and means the value should be negated.
-
-An `inv` node has `child` and means the value should be inverted. 
-Inputs are valid, so you will not need to invert zero.
-
-An `abs` node has `child`. The result is the absolute value on the number line: non-negative numerator, positive denominator, fully reduced (so `abs` of `-15/6` is `5/2`).
-
-`min` and `max` nodes have `left` and `right`. They return the smaller or larger rational in the usual total order on ℚ. Compare `n1/d1` and `n2/d2` with positive denominators using integer cross products `n1*d2` versus `n2*d1` (do not convert to float). If the two values are equal, either branch may be used as the result, but the output must still be the canonical reduced pair for that rational.
-
-`assignment.json` has a `vars` object. Each variable maps to `{"num": ..., "den": ...}` with a positive denominator. These fractions may also be unreduced.
-
-The graph is acyclic (no cycles) and may reuse the same node id from multiple parents. 
-Cache each evaluated node id so the same subgraph is only evaluated once. The verifier includes a deep nested pattern where the same ids are reached an enormous number of times if you naively re-walk children on every reference—without memoization that case is meant to stall or time out, even though the JSON is still small.
-
-The script should run like this:
+Command line shape:
 
 `python3 /app/evaluate.py [--graph PATH] [--assignment PATH] [--output PATH]`
 
-When no flags are provided, it should read `/app/graph.json` and `/app/assignment.json`, then write the result to `/app/result.json`.
+If you omit the flags, default to `/app/graph.json`, `/app/assignment.json`, and `/app/result.json`. The bundled files are only a sanity check; the grader also runs large random DAGs, long cancellation chains, and the nested memo torture case, so reduction habits and memoization matter in practice.
 
-The result file must be a single JSON object with exactly those two keys, `num` and `den` (both integers). The bundled smoke test loads the JSON and checks for exact equality with the reference object, so extra keys will fail that check.
+Standard library only, but the checker parses your file: any `import` / `from … import` whose top-level module name is `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` will fail you (so `from fractions import Fraction` is out for the same reason). Do not call `eval`, `exec`, `compile`, or `__import__` by bare name anywhere in the module. `math.gcd` is fair game for reduction.
 
-The denominator must always be positive. 
-The fraction must be reduced (`gcd(abs(num), den) == 1`). If the result is negative, keep the negative sign on `num`.
-
-Use the standard library only. The verifier parses `evaluate.py` with the AST and rejects the solution if the top-level module name of any `import` or `from … import` is one of: `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` (for example `from fractions import Fraction` is forbidden because the first segment is `fractions`).
-
-Also do not call `eval`, `exec`, `compile`, or `__import__` by bare name anywhere in the file.
-
-You can use `math.gcd`. The bundled graph is only a small smoke test. 
-The verifier also runs many larger random DAGs mixing `add`, `sub`, `mul`, `neg`, `inv`, `abs`, `min`, and `max`, plus long cancellation chains, so exact integer rational arithmetic, ordering without floats, aggressive reduction, and per-node memoization all matter.
+If you can run the script with defaults, delete nothing critical from your logic when the graph grows, and still match the oracle on weird mixes of `inv`, ordering, and rounding, you are in the right neighborhood.

@@ -83,6 +83,14 @@ def _oracle_fraction(graph: dict, assignment: dict) -> Fraction:
         elif k == "max":
             a, b = visit(n["left"]), visit(n["right"])
             r = a if a >= b else b
+        elif k == "floor":
+            v = visit(n["child"])
+            qn, qd = v.numerator, v.denominator
+            r = Fraction(qn // qd, 1)
+        elif k == "ceil":
+            v = visit(n["child"])
+            nv = -v
+            r = -Fraction(nv.numerator // nv.denominator, 1)
         else:
             raise ValueError(f"unknown kind {k}")
         memo[nid] = r
@@ -104,7 +112,7 @@ def _collect_var_names(graph: dict) -> set[str]:
         elif k in ("add", "sub", "mul", "min", "max"):
             stack.append(n["left"])
             stack.append(n["right"])
-        elif k in ("neg", "inv", "abs"):
+        elif k in ("neg", "inv", "abs", "floor", "ceil"):
             stack.append(n["child"])
         else:
             assert k == "const", k
@@ -220,12 +228,26 @@ def test_bundled_default_paths():
 
 
 def test_bundled_matches_fraction_oracle():
-    """Shipped graph.json + assignment.json must agree with the internal Fraction oracle."""
+    """Bundled JSON matches the Fraction oracle and evaluate.py default CLI output."""
+    assert EVALUATE.is_file()
     graph = json.loads(DEFAULT_GRAPH.read_text(encoding="utf-8"))
     assign = json.loads(DEFAULT_ASSIGN.read_text(encoding="utf-8"))
     expected = _oracle_fraction(graph, assign)
     assert expected.numerator == EXPECTED_BUNDLED["num"]
     assert expected.denominator == EXPECTED_BUNDLED["den"]
+    if DEFAULT_RESULT.exists():
+        DEFAULT_RESULT.unlink()
+    proc = subprocess.run(
+        ["python3", str(EVALUATE)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd="/app",
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(DEFAULT_RESULT.read_text(encoding="utf-8"))
+    assert Fraction(int(data["num"]), int(data["den"])) == expected
+    _assert_reduced(int(data["num"]), int(data["den"]))
 
 
 def test_const_only_diamond():
@@ -254,7 +276,7 @@ def test_telescope_cancellation_chain():
     nodes: dict = {}
     nodes["n0"] = {"kind": "const", "num": 1, "den": 1}
     prev = "n0"
-    for k in range(1, 100):
+    for k in range(1, 115):
         a, b, m, out = f"ca{k}", f"cb{k}", f"mk{k}", f"ac{k}"
         nodes[a] = {"kind": "const", "num": 1, "den": k + 1}
         nodes[b] = {"kind": "const", "num": k + 1, "den": 1}
@@ -358,6 +380,70 @@ def test_max_negative_vs_positive():
     _assert_reduced(int(data["num"]), int(data["den"]))
 
 
+def test_min_equal_values_canonical():
+    """When min arguments are equal rationals in different reductions, output must be canonical."""
+    graph = {
+        "root": "lo",
+        "nodes": {
+            "a": {"kind": "const", "num": 3, "den": 4},
+            "b": {"kind": "const", "num": 6, "den": 8},
+            "lo": {"kind": "min", "left": "a", "right": "b"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 3 and data["den"] == 4
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_max_equal_values_canonical():
+    """When max arguments are equal rationals in different reductions, output must be canonical."""
+    graph = {
+        "root": "hi",
+        "nodes": {
+            "a": {"kind": "const", "num": 3, "den": 4},
+            "b": {"kind": "const", "num": 6, "den": 8},
+            "hi": {"kind": "max", "left": "a", "right": "b"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 3 and data["den"] == 4
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_floor_and_ceil_negative_rational():
+    """floor/ceil toward ±∞ on ℚ without floats; -7/3 has floor -3 and ceil -2."""
+    graph = {
+        "root": "both",
+        "nodes": {
+            "q": {"kind": "const", "num": -7, "den": 3},
+            "fl": {"kind": "floor", "child": "q"},
+            "cl": {"kind": "ceil", "child": "q"},
+            "both": {"kind": "add", "left": "fl", "right": "cl"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == -5 and data["den"] == 1
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
 def test_max_of_min_and_max_recombines():
     """DAG reuses min/max of the same pair then maxes them — result is the larger branch."""
     graph = {
@@ -383,7 +469,8 @@ def test_max_of_min_and_max_recombines():
 
 def test_nested_mul_diamond_memo_required():
     """Deeply nested mul(add(m,m),...) diamonds revisit shared ids; naive re-walk is exponential."""
-    levels = 11
+    # One extra layer vs earlier revisions: final integers are huge but still feasible with memo.
+    levels = 12
     graph = _build_nested_mul_diamond(levels)
     assign = {"vars": {}}
     expected = _nested_mul_diamond_expected(levels)
@@ -392,14 +479,14 @@ def test_nested_mul_diamond_memo_required():
         gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
         gp.write_text(json.dumps(graph), encoding="utf-8")
         ap.write_text(json.dumps(assign), encoding="utf-8")
-        data = _run_evaluate(gp, ap, op, timeout_sec=55.0)
+        data = _run_evaluate(gp, ap, op, timeout_sec=60.0)
     got = Fraction(int(data["num"]), int(data["den"]))
     assert got == expected, f"expected {expected} got {got}"
     _assert_reduced(int(data["num"]), int(data["den"]))
 
 
 def _random_graph(rng: random.Random, n_nodes: int) -> dict:
-    """Random DAG: new nodes only reference older ids; mixes abs/min/max/inv/neg/binary ops."""
+    """Random DAG: new nodes only reference older ids; mixes many unary/binary kinds."""
     nodes: dict = {}
     nodes["v0"] = {
         "kind": "const",
@@ -413,22 +500,28 @@ def _random_graph(rng: random.Random, n_nodes: int) -> dict:
         nid = f"v{i}"
         choices = [f"v{k}" for k in range(i)]
         roll = rng.random()
-        if roll < 0.48:
+        if roll < 0.40:
             left = rng.choice(choices)
             right = rng.choice(choices)
             op = rng.choice(["add", "sub", "mul"])
             nodes[nid] = {"kind": op, "left": left, "right": right}
-        elif roll < 0.58:
+        elif roll < 0.50:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "abs", "child": child}
-        elif roll < 0.72:
+        elif roll < 0.64:
             left = rng.choice(choices)
             right = rng.choice(choices)
             op = rng.choice(["min", "max"])
             nodes[nid] = {"kind": op, "left": left, "right": right}
-        elif roll < 0.84:
+        elif roll < 0.74:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "inv", "child": child}
+        elif roll < 0.82:
+            child = rng.choice(choices)
+            nodes[nid] = {"kind": "floor", "child": child}
+        elif roll < 0.90:
+            child = rng.choice(choices)
+            nodes[nid] = {"kind": "ceil", "child": child}
         else:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "neg", "child": child}
@@ -448,9 +541,9 @@ def _random_assignment(rng: random.Random, names: set[str]) -> dict:
 def test_random_graphs_match_oracle():
     """Many seeded random DAGs must match the Fraction oracle after resampling away inv-of-zero."""
     assert EVALUATE.is_file()
-    for trial in range(180):
+    for trial in range(260):
         rng = random.Random(410_000 + trial)
-        n = rng.randint(32, 120)
+        n = rng.randint(40, 140)
         graph = None
         assign = None
         expected = None

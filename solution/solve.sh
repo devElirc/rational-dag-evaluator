@@ -73,6 +73,17 @@ def rat_max(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
     return norm(n2, d2)
 
 
+def rat_floor(n: int, d: int) -> tuple[int, int]:
+    assert d > 0
+    return norm(n // d, 1)
+
+
+def rat_ceil(n: int, d: int) -> tuple[int, int]:
+    nn, dd = rat_neg(n, d)
+    fn, fd = rat_floor(nn, dd)
+    return rat_neg(fn, fd)
+
+
 class Evaluator:
     def __init__(self, nodes: dict[str, Any], root: str, vars_: dict[str, dict[str, int]]):
         self.nodes = nodes
@@ -119,6 +130,12 @@ class Evaluator:
             n1, d1 = self.eval_node(n["left"])
             n2, d2 = self.eval_node(n["right"])
             out = rat_max(n1, d1, n2, d2)
+        elif k == "floor":
+            a, b = self.eval_node(n["child"])
+            out = rat_floor(a, b)
+        elif k == "ceil":
+            a, b = self.eval_node(n["child"])
+            out = rat_ceil(a, b)
         else:
             raise ValueError(f"unknown kind {k!r}")
         self.memo[nid] = out

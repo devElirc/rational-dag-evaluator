@@ -17,8 +17,8 @@ tags = [
     "graph-traversal",
     "rational-ordering",
 ]
-expert_time_estimate_min = 360
-junior_time_estimate_min = 840
+expert_time_estimate_min = 420
+junior_time_estimate_min = 960
 
 [verifier]
 timeout_sec = 720.0
