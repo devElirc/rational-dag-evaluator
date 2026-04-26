@@ -18,11 +18,11 @@ tags = [
     "rational-ordering",
     "sign-truncation",
 ]
-expert_time_estimate_min = 480
-junior_time_estimate_min = 1080
+expert_time_estimate_min = 720
+junior_time_estimate_min = 1680
 
 [verifier]
-timeout_sec = 720.0
+timeout_sec = 900.0
 
 [agent]
 timeout_sec = 1800.0

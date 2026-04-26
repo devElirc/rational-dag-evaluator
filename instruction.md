@@ -6,6 +6,10 @@ Constants are `const` rows with integer `num` and `den` where `den` is already p
 
 The usual binary arithmetic nodes are `add`, `sub`, and `mul`, each with `left` and `right` ids. Unary `neg` negates. Unary `inv` reciprocates; the inputs are always valid, so you never reciprocate a value that is exactly zero. Unary `abs` is distance from zero on the line, so after reduction you end up with a non-negative numerator—`abs(-15/6)` should land on `5/2`.
 
+There is also binary `mod` with `left` and `right` ids. 
+Treat it as Euclidean remainder on rationals: if `L` is the value of `left` and `R` the value of `right` (and `R` is never zero in the tests), let `Q = L / R` using rational division, let `k` be the integer `floor(Q)` in the same sense as the unary `floor` node (toward −∞), and define `mod(L, R) = L − k·R`, all with exact integer arithmetic after reduction. 
+For example `mod(7/3, 2/1)` is `1/3` because `7/3 ÷ 2/1 = 7/6`, `floor(7/6)=1`, and `7/3 − 1·2 = 1/3`.
+
 `min` and `max` pick the smaller or larger rational in the ordinary order on ℚ. Compare two reduced-or-not values with positive denominators by integer cross products `n1*d2` against `n2*d1`, never by casting to float. If the two sides tie, either branch is fine as long as you still emit the canonical reduced pair for that single rational value.
 
 Rounding comes in several flavours, all unary on a `child` id, and every answer that is “an integer” is written as a reduced rational with denominator `1`. `floor` heads toward negative infinity and `ceil` toward positive infinity, so `floor(-7/3)` is `-3` while `ceil(-7/3)` is `-2`. A handy trick if you implement one first is `ceil(x) = -floor(-x)`, still using only integers.
@@ -20,7 +24,8 @@ Run it like this:
 
 `python3 /app/evaluate.py [--graph PATH] [--assignment PATH] [--output PATH]`
 
-With no flags, read `/app/graph.json` and `/app/assignment.json` and write `/app/result.json`. The checked-in graph is just a smoke test; behind the scenes there are long cancellation chains, big random mixes of every operator above (including `trunc` and `sgn` next to `inv`, ordering, and the infinity-rounding pair), and the nested memo stress case, so sloppy reduction or the wrong flavour of rounding will show up quickly.
+With no flags, read `/app/graph.json` and `/app/assignment.json` and write `/app/result.json`. 
+The checked-in graph is just a smoke test; behind the scenes there are long cancellation chains, big random mixes of every operator above (including `mod`, `trunc`, and `sgn` next to `inv`, ordering, and the infinity-rounding pair), and the nested memo stress case, so sloppy reduction or the wrong flavour of rounding will show up quickly.
 
 Stick to the standard library, but know that the grader walks the AST: importing any of `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` as the top-level name in `import` / `from … import` will fail you, and so will bare calls to `eval`, `exec`, `compile`, or `__import__`. `math.gcd` is explicitly allowed for reduction.
 

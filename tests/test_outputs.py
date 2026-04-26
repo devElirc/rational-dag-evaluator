@@ -75,6 +75,11 @@ def _oracle_fraction(graph: dict, assignment: dict) -> Fraction:
             r = visit(n["left"]) - visit(n["right"])
         elif k == "mul":
             r = visit(n["left"]) * visit(n["right"])
+        elif k == "mod":
+            lft, rgt = visit(n["left"]), visit(n["right"])
+            q = lft / rgt
+            k_int = q.numerator // q.denominator
+            r = lft - Fraction(k_int, 1) * rgt
         elif k == "abs":
             r = abs(visit(n["child"]))
         elif k == "min":
@@ -124,7 +129,7 @@ def _collect_var_names(graph: dict) -> set[str]:
         k = n["kind"]
         if k == "var":
             seen.add(n["name"])
-        elif k in ("add", "sub", "mul", "min", "max"):
+        elif k in ("add", "sub", "mul", "min", "max", "mod"):
             stack.append(n["left"])
             stack.append(n["right"])
         elif k in ("neg", "inv", "abs", "floor", "ceil", "trunc", "sgn"):
@@ -138,6 +143,18 @@ def _assert_reduced(num: int, den: int) -> None:
     assert den > 0, "denominator must be positive"
     g = math.gcd(abs(num), den)
     assert g == 1, f"expected reduced fraction, got gcd={g} for {num}/{den}"
+
+
+def _assert_result_json_schema(data: object) -> None:
+    """instruction.md: result.json must be exactly {\"num\", \"den\"} with integer values."""
+    assert isinstance(data, dict), "result.json must be a JSON object"
+    assert set(data.keys()) == {"num", "den"}, (
+        "result.json must contain only num and den keys, got "
+        f"{sorted(data.keys())!r}"
+    )
+    assert isinstance(data["num"], int) and isinstance(data["den"], int), (
+        "num and den must be JSON integers"
+    )
 
 
 def _run_evaluate(
@@ -164,7 +181,9 @@ def _run_evaluate(
     )
     assert proc.returncode == 0, f"evaluate.py failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
     assert out_path.is_file(), "output file not written"
-    return json.loads(out_path.read_text(encoding="utf-8"))
+    data = json.loads(out_path.read_text(encoding="utf-8"))
+    _assert_result_json_schema(data)
+    return data
 
 
 def _check_ast_constraints() -> None:
@@ -238,6 +257,7 @@ def test_bundled_default_paths():
     )
     assert proc.returncode == 0, proc.stderr
     data = json.loads(DEFAULT_RESULT.read_text(encoding="utf-8"))
+    _assert_result_json_schema(data)
     assert data == EXPECTED_BUNDLED
     _assert_reduced(data["num"], data["den"])
 
@@ -261,6 +281,7 @@ def test_bundled_matches_fraction_oracle():
     )
     assert proc.returncode == 0, proc.stderr
     data = json.loads(DEFAULT_RESULT.read_text(encoding="utf-8"))
+    _assert_result_json_schema(data)
     assert Fraction(int(data["num"]), int(data["den"])) == expected
     _assert_reduced(int(data["num"]), int(data["den"]))
 
@@ -291,7 +312,7 @@ def test_telescope_cancellation_chain():
     nodes: dict = {}
     nodes["n0"] = {"kind": "const", "num": 1, "den": 1}
     prev = "n0"
-    for k in range(1, 135):
+    for k in range(1, 198):
         a, b, m, out = f"ca{k}", f"cb{k}", f"mk{k}", f"ac{k}"
         nodes[a] = {"kind": "const", "num": 1, "den": k + 1}
         nodes[b] = {"kind": "const", "num": k + 1, "den": 1}
@@ -527,6 +548,48 @@ def test_floor_and_ceil_negative_rational():
     _assert_reduced(int(data["num"]), int(data["den"]))
 
 
+def test_mod_basic_positive():
+    """mod(L,R) = L - floor(L/R)*R; 7/3 mod 2/1 = 1/3."""
+    graph = {
+        "root": "m",
+        "nodes": {
+            "l": {"kind": "const", "num": 7, "den": 3},
+            "r": {"kind": "const", "num": 2, "den": 1},
+            "m": {"kind": "mod", "left": "l", "right": "r"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 1 and data["den"] == 3
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_mod_negative_quotient_matches_floor_definition():
+    """When L/R is negative, floor still goes toward -∞; -7/3 mod 2/1 = 5/3."""
+    graph = {
+        "root": "m",
+        "nodes": {
+            "l": {"kind": "const", "num": -7, "den": 3},
+            "r": {"kind": "const", "num": 2, "den": 1},
+            "m": {"kind": "mod", "left": "l", "right": "r"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 5 and data["den"] == 3
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
 def test_max_of_min_and_max_recombines():
     """DAG reuses min/max of the same pair then maxes them — result is the larger branch."""
     graph = {
@@ -585,32 +648,32 @@ def _random_graph(rng: random.Random, n_nodes: int) -> dict:
         nid = f"v{i}"
         choices = [f"v{k}" for k in range(i)]
         roll = rng.random()
-        if roll < 0.34:
+        if roll < 0.36:
             left = rng.choice(choices)
             right = rng.choice(choices)
-            op = rng.choice(["add", "sub", "mul"])
+            op = rng.choice(["add", "sub", "mul", "mod"])
             nodes[nid] = {"kind": op, "left": left, "right": right}
-        elif roll < 0.43:
+        elif roll < 0.45:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "abs", "child": child}
-        elif roll < 0.56:
+        elif roll < 0.58:
             left = rng.choice(choices)
             right = rng.choice(choices)
             op = rng.choice(["min", "max"])
             nodes[nid] = {"kind": op, "left": left, "right": right}
-        elif roll < 0.66:
+        elif roll < 0.68:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "inv", "child": child}
-        elif roll < 0.74:
+        elif roll < 0.76:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "floor", "child": child}
-        elif roll < 0.82:
+        elif roll < 0.84:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "ceil", "child": child}
-        elif roll < 0.89:
+        elif roll < 0.91:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "trunc", "child": child}
-        elif roll < 0.95:
+        elif roll < 0.97:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "sgn", "child": child}
         else:
@@ -632,13 +695,13 @@ def _random_assignment(rng: random.Random, names: set[str]) -> dict:
 def test_random_graphs_match_oracle():
     """Many seeded random DAGs must match the Fraction oracle after resampling away inv-of-zero."""
     assert EVALUATE.is_file()
-    for trial in range(380):
+    for trial in range(520):
         rng = random.Random(410_000 + trial)
-        n = rng.randint(55, 170)
+        n = rng.randint(72, 205)
         graph = None
         assign = None
         expected = None
-        for _ in range(72):
+        for _ in range(88):
             graph = _random_graph(rng, n)
             names = _collect_var_names(graph)
             assign = _random_assignment(rng, names)
@@ -656,7 +719,6 @@ def test_random_graphs_match_oracle():
             gp.write_text(json.dumps(graph), encoding="utf-8")
             ap.write_text(json.dumps(assign), encoding="utf-8")
             data = _run_evaluate(gp, ap, op)
-        assert "num" in data and "den" in data
         _assert_reduced(int(data["num"]), int(data["den"]))
         got = Fraction(int(data["num"]), int(data["den"]))
         assert got == expected, f"trial {trial}: expected {expected} got {got}"

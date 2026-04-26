@@ -36,6 +36,19 @@ def rat_mul(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
     return norm(n1 * n2, d1 * d2)
 
 
+def rat_div(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
+    rn, rd = rat_inv(n2, d2)
+    return rat_mul(n1, d1, rn, rd)
+
+
+def rat_mod(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
+    """L - floor(L/R)*R with R != 0."""
+    qn, qd = rat_div(n1, d1, n2, d2)
+    fn, fd = rat_floor(qn, qd)
+    pn, pd = rat_mul(n2, d2, fn, fd)
+    return rat_sub(n1, d1, pn, pd)
+
+
 def rat_neg(n: int, d: int) -> tuple[int, int]:
     return norm(-n, d)
 
@@ -132,6 +145,10 @@ class Evaluator:
             n1, d1 = self.eval_node(n["left"])
             n2, d2 = self.eval_node(n["right"])
             out = rat_mul(n1, d1, n2, d2)
+        elif k == "mod":
+            n1, d1 = self.eval_node(n["left"])
+            n2, d2 = self.eval_node(n["right"])
+            out = rat_mod(n1, d1, n2, d2)
         elif k == "abs":
             a, b = self.eval_node(n["child"])
             out = rat_abs(a, b)
