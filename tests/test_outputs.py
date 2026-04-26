@@ -75,6 +75,14 @@ def _oracle_fraction(graph: dict, assignment: dict) -> Fraction:
             r = visit(n["left"]) - visit(n["right"])
         elif k == "mul":
             r = visit(n["left"]) * visit(n["right"])
+        elif k == "abs":
+            r = abs(visit(n["child"]))
+        elif k == "min":
+            a, b = visit(n["left"]), visit(n["right"])
+            r = a if a <= b else b
+        elif k == "max":
+            a, b = visit(n["left"]), visit(n["right"])
+            r = a if a >= b else b
         else:
             raise ValueError(f"unknown kind {k}")
         memo[nid] = r
@@ -93,10 +101,10 @@ def _collect_var_names(graph: dict) -> set[str]:
         k = n["kind"]
         if k == "var":
             seen.add(n["name"])
-        elif k in ("add", "sub", "mul"):
+        elif k in ("add", "sub", "mul", "min", "max"):
             stack.append(n["left"])
             stack.append(n["right"])
-        elif k in ("neg", "inv"):
+        elif k in ("neg", "inv", "abs"):
             stack.append(n["child"])
         else:
             assert k == "const", k
@@ -109,7 +117,13 @@ def _assert_reduced(num: int, den: int) -> None:
     assert g == 1, f"expected reduced fraction, got gcd={g} for {num}/{den}"
 
 
-def _run_evaluate(graph_path: Path, assign_path: Path, out_path: Path) -> dict:
+def _run_evaluate(
+    graph_path: Path,
+    assign_path: Path,
+    out_path: Path,
+    *,
+    timeout_sec: float = 120.0,
+) -> dict:
     proc = subprocess.run(
         [
             "python3",
@@ -123,7 +137,7 @@ def _run_evaluate(graph_path: Path, assign_path: Path, out_path: Path) -> dict:
         ],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=timeout_sec,
     )
     assert proc.returncode == 0, f"evaluate.py failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
     assert out_path.is_file(), "output file not written"
@@ -147,11 +161,42 @@ def _check_ast_constraints() -> None:
             )
 
 
+def _build_nested_mul_diamond(levels: int) -> dict:
+    """Nested (add then mul) diamonds: each mul shares one add node; revisits explode without memo."""
+    assert levels >= 1
+    nodes: dict = {}
+    c = "c0"
+    nodes[c] = {"kind": "const", "num": 1, "den": 1}
+    prev_m: str | None = None
+    for k in range(levels):
+        sk, mk = f"s{k}", f"m{k}"
+        if k == 0:
+            nodes[sk] = {"kind": "add", "left": c, "right": c}
+        else:
+            assert prev_m is not None
+            nodes[sk] = {"kind": "add", "left": prev_m, "right": prev_m}
+        nodes[mk] = {"kind": "mul", "left": sk, "right": sk}
+        prev_m = mk
+    assert prev_m is not None
+    return {"root": prev_m, "nodes": nodes}
+
+
+def _nested_mul_diamond_expected(levels: int) -> Fraction:
+    """Closed form for _build_nested_mul_diamond: m0=4, m_{k} = (2*m_{k-1})^2."""
+    m = Fraction(4, 1)
+    for _ in range(1, levels):
+        s = m + m
+        m = s * s
+    return m
+
+
 def test_evaluate_script_exists():
+    """Agent must create /app/evaluate.py before any functional checks."""
     assert EVALUATE.is_file(), "Missing /app/evaluate.py"
 
 
 def test_ast_forbidden_imports_and_calls():
+    """Banned stdlib shortcuts and dynamic execution must not appear in source."""
     assert EVALUATE.is_file()
     _check_ast_constraints()
 
@@ -175,6 +220,7 @@ def test_bundled_default_paths():
 
 
 def test_bundled_matches_fraction_oracle():
+    """Shipped graph.json + assignment.json must agree with the internal Fraction oracle."""
     graph = json.loads(DEFAULT_GRAPH.read_text(encoding="utf-8"))
     assign = json.loads(DEFAULT_ASSIGN.read_text(encoding="utf-8"))
     expected = _oracle_fraction(graph, assign)
@@ -208,7 +254,7 @@ def test_telescope_cancellation_chain():
     nodes: dict = {}
     nodes["n0"] = {"kind": "const", "num": 1, "den": 1}
     prev = "n0"
-    for k in range(1, 55):
+    for k in range(1, 100):
         a, b, m, out = f"ca{k}", f"cb{k}", f"mk{k}", f"ac{k}"
         nodes[a] = {"kind": "const", "num": 1, "den": k + 1}
         nodes[b] = {"kind": "const", "num": k + 1, "den": 1}
@@ -224,9 +270,11 @@ def test_telescope_cancellation_chain():
         ap.write_text(json.dumps(assign), encoding="utf-8")
         data = _run_evaluate(gp, ap, op)
     assert data["num"] == 1 and data["den"] == 1
+    _assert_reduced(data["num"], data["den"])
 
 
 def test_neg_inv_fixture():
+    """Hand-crafted neg(inv(const)) plus add checks sign handling and inv correctness."""
     graph = {
         "root": "out",
         "nodes": {
@@ -238,7 +286,6 @@ def test_neg_inv_fixture():
         },
     }
     assign = {"vars": {}}
-    # -4/3 + 1/6 = -8/6 + 1/6 = -7/6
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
@@ -249,26 +296,139 @@ def test_neg_inv_fixture():
     _assert_reduced(data["num"], data["den"])
 
 
+def test_abs_negative_rational():
+    """abs must return a non-negative numerator with positive denominator, fully reduced."""
+    graph = {
+        "root": "o",
+        "nodes": {
+            "n": {"kind": "const", "num": -15, "den": 6},
+            "o": {"kind": "abs", "child": "n"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 5 and data["den"] == 2
+    _assert_reduced(data["num"], data["den"])
+
+
+def test_min_negative_vs_positive():
+    """min must pick the smaller rational when one branch is negative (cross-mul, not floats)."""
+    graph = {
+        "root": "lo",
+        "nodes": {
+            "a": {"kind": "const", "num": -1, "den": 2},
+            "b": {"kind": "const", "num": 1, "den": 3},
+            "lo": {"kind": "min", "left": "a", "right": "b"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == -1 and data["den"] == 2
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_max_negative_vs_positive():
+    """max must pick the larger rational when one branch is negative."""
+    graph = {
+        "root": "hi",
+        "nodes": {
+            "a": {"kind": "const", "num": -1, "den": 2},
+            "b": {"kind": "const", "num": 1, "den": 3},
+            "hi": {"kind": "max", "left": "a", "right": "b"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 1 and data["den"] == 3
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_max_of_min_and_max_recombines():
+    """DAG reuses min/max of the same pair then maxes them — result is the larger branch."""
+    graph = {
+        "root": "mx",
+        "nodes": {
+            "a": {"kind": "const", "num": -1, "den": 2},
+            "b": {"kind": "const", "num": 1, "den": 3},
+            "lo": {"kind": "min", "left": "a", "right": "b"},
+            "hi": {"kind": "max", "left": "a", "right": "b"},
+            "mx": {"kind": "max", "left": "lo", "right": "hi"},
+        },
+    }
+    assign = {"vars": {}}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op)
+    assert data["num"] == 1 and data["den"] == 3
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
+def test_nested_mul_diamond_memo_required():
+    """Deeply nested mul(add(m,m),...) diamonds revisit shared ids; naive re-walk is exponential."""
+    levels = 11
+    graph = _build_nested_mul_diamond(levels)
+    assign = {"vars": {}}
+    expected = _nested_mul_diamond_expected(levels)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
+        gp.write_text(json.dumps(graph), encoding="utf-8")
+        ap.write_text(json.dumps(assign), encoding="utf-8")
+        data = _run_evaluate(gp, ap, op, timeout_sec=55.0)
+    got = Fraction(int(data["num"]), int(data["den"]))
+    assert got == expected, f"expected {expected} got {got}"
+    _assert_reduced(int(data["num"]), int(data["den"]))
+
+
 def _random_graph(rng: random.Random, n_nodes: int) -> dict:
-    """Build a random DAG (reverse topological: each new node only references older ids)."""
+    """Random DAG: new nodes only reference older ids; mixes abs/min/max/inv/neg/binary ops."""
     nodes: dict = {}
     nodes["v0"] = {
         "kind": "const",
         "num": rng.randint(1, 9),
         "den": rng.randint(1, 9),
     }
-    var_names = [f"x{i}" for i in range(8)]
-    for j in range(1, min(5, n_nodes)):
+    var_names = [f"x{i}" for i in range(10)]
+    for j in range(1, min(6, n_nodes)):
         nodes[f"v{j}"] = {"kind": "var", "name": var_names[j - 1]}
-    for i in range(5, n_nodes):
+    for i in range(6, n_nodes):
         nid = f"v{i}"
         choices = [f"v{k}" for k in range(i)]
         roll = rng.random()
-        if roll < 0.78:
+        if roll < 0.48:
             left = rng.choice(choices)
             right = rng.choice(choices)
             op = rng.choice(["add", "sub", "mul"])
             nodes[nid] = {"kind": op, "left": left, "right": right}
+        elif roll < 0.58:
+            child = rng.choice(choices)
+            nodes[nid] = {"kind": "abs", "child": child}
+        elif roll < 0.72:
+            left = rng.choice(choices)
+            right = rng.choice(choices)
+            op = rng.choice(["min", "max"])
+            nodes[nid] = {"kind": op, "left": left, "right": right}
+        elif roll < 0.84:
+            child = rng.choice(choices)
+            nodes[nid] = {"kind": "inv", "child": child}
         else:
             child = rng.choice(choices)
             nodes[nid] = {"kind": "neg", "child": child}
@@ -286,14 +446,26 @@ def _random_assignment(rng: random.Random, names: set[str]) -> dict:
 
 
 def test_random_graphs_match_oracle():
+    """Many seeded random DAGs must match the Fraction oracle after resampling away inv-of-zero."""
     assert EVALUATE.is_file()
-    for trial in range(72):
-        rng = random.Random(9001 + trial)
-        n = rng.randint(18, 48)
-        graph = _random_graph(rng, n)
-        names = _collect_var_names(graph)
-        assign = _random_assignment(rng, names)
-        expected = _oracle_fraction(graph, assign)
+    for trial in range(180):
+        rng = random.Random(410_000 + trial)
+        n = rng.randint(32, 120)
+        graph = None
+        assign = None
+        expected = None
+        for _ in range(72):
+            graph = _random_graph(rng, n)
+            names = _collect_var_names(graph)
+            assign = _random_assignment(rng, names)
+            try:
+                expected = _oracle_fraction(graph, assign)
+                break
+            except ZeroDivisionError:
+                rng = random.Random(rng.randint(1, 2**31 - 1))
+        assert graph is not None and assign is not None and expected is not None, (
+            "could not sample a graph without inv-of-zero after several tries"
+        )
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             gp, ap, op = td / "g.json", td / "a.json", td / "o.json"

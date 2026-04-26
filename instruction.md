@@ -1,5 +1,5 @@
 I have a small spreadsheet-like graph in `/app`. 
-There is no UI. Each node is either a rational number, a variable, or a simple math operation.
+There is no UI. Each node is either a rational number, a variable, or a math operation.
 
 Please write `/app/evaluate.py`.
 
@@ -13,7 +13,7 @@ Reduce fractions as you go so large hidden tests do not get slow.
 
 Each node has a `kind`.
 
-A `const` node has `num` and `den`. The denominator is positive, but the fraction may not be reduced.
+A `const` node has `num` and `den`. The denominator is positive, but the fraction may not be reduced. The numerator may be negative.
 
 A `var` node has `name`. Look up that name in `assignment.json` under `vars`.
 
@@ -24,10 +24,14 @@ A `neg` node has `child` and means the value should be negated.
 An `inv` node has `child` and means the value should be inverted. 
 Inputs are valid, so you will not need to invert zero.
 
+An `abs` node has `child`. The result is the absolute value on the number line: non-negative numerator, positive denominator, fully reduced (so `abs` of `-15/6` is `5/2`).
+
+`min` and `max` nodes have `left` and `right`. They return the smaller or larger rational in the usual total order on ℚ. Compare `n1/d1` and `n2/d2` with positive denominators using integer cross products `n1*d2` versus `n2*d1` (do not convert to float). If the two values are equal, either branch may be used as the result, but the output must still be the canonical reduced pair for that rational.
+
 `assignment.json` has a `vars` object. Each variable maps to `{"num": ..., "den": ...}` with a positive denominator. These fractions may also be unreduced.
 
 The graph is acyclic (no cycles) and may reuse the same node id from multiple parents. 
-Cache each evaluated node id so the same subgraph is only evaluated once.
+Cache each evaluated node id so the same subgraph is only evaluated once. The verifier includes a deep nested pattern where the same ids are reached an enormous number of times if you naively re-walk children on every reference—without memoization that case is meant to stall or time out, even though the JSON is still small.
 
 The script should run like this:
 
@@ -40,9 +44,9 @@ The result file must be a single JSON object with exactly those two keys, `num` 
 The denominator must always be positive. 
 The fraction must be reduced (`gcd(abs(num), den) == 1`). If the result is negative, keep the negative sign on `num`.
 
-Use the standard library only. The verifier parses `evaluate.py` with the AST and rejects the solution if the **top-level** module name of any `import` or `from … import` is one of: `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` (for example `from fractions import Fraction` is forbidden because the first segment is `fractions`).
+Use the standard library only. The verifier parses `evaluate.py` with the AST and rejects the solution if the top-level module name of any `import` or `from … import` is one of: `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` (for example `from fractions import Fraction` is forbidden because the first segment is `fractions`).
 
 Also do not call `eval`, `exec`, `compile`, or `__import__` by bare name anywhere in the file.
 
 You can use `math.gcd`. The bundled graph is only a small smoke test. 
-The verifier will also run larger random graphs, so exact arithmetic, reduction, and memoization are important.
+The verifier also runs many larger random DAGs mixing `add`, `sub`, `mul`, `neg`, `inv`, `abs`, `min`, and `max`, plus long cancellation chains, so exact integer rational arithmetic, ordering without floats, aggressive reduction, and per-node memoization all matter.

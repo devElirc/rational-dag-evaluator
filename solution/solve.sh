@@ -46,6 +46,33 @@ def rat_inv(n: int, d: int) -> tuple[int, int]:
     return norm(d, n)
 
 
+def rat_abs(n: int, d: int) -> tuple[int, int]:
+    return norm(abs(n), d)
+
+
+def rat_cmp(n1: int, d1: int, n2: int, d2: int) -> int:
+    """-1 if n1/d1 < n2/d2, 0 if equal, 1 if greater (denominators positive)."""
+    lhs = n1 * d2
+    rhs = n2 * d1
+    if lhs < rhs:
+        return -1
+    if lhs > rhs:
+        return 1
+    return 0
+
+
+def rat_min(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
+    if rat_cmp(n1, d1, n2, d2) <= 0:
+        return norm(n1, d1)
+    return norm(n2, d2)
+
+
+def rat_max(n1: int, d1: int, n2: int, d2: int) -> tuple[int, int]:
+    if rat_cmp(n1, d1, n2, d2) >= 0:
+        return norm(n1, d1)
+    return norm(n2, d2)
+
+
 class Evaluator:
     def __init__(self, nodes: dict[str, Any], root: str, vars_: dict[str, dict[str, int]]):
         self.nodes = nodes
@@ -81,6 +108,17 @@ class Evaluator:
             n1, d1 = self.eval_node(n["left"])
             n2, d2 = self.eval_node(n["right"])
             out = rat_mul(n1, d1, n2, d2)
+        elif k == "abs":
+            a, b = self.eval_node(n["child"])
+            out = rat_abs(a, b)
+        elif k == "min":
+            n1, d1 = self.eval_node(n["left"])
+            n2, d2 = self.eval_node(n["right"])
+            out = rat_min(n1, d1, n2, d2)
+        elif k == "max":
+            n1, d1 = self.eval_node(n["left"])
+            n2, d2 = self.eval_node(n["right"])
+            out = rat_max(n1, d1, n2, d2)
         else:
             raise ValueError(f"unknown kind {k!r}")
         self.memo[nid] = out
