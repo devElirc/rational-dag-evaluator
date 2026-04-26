@@ -552,8 +552,10 @@ def test_max_of_min_and_max_recombines():
 
 def test_nested_mul_diamond_memo_required():
     """Deeply nested mul(add(m,m),...) diamonds revisit shared ids; naive re-walk is exponential."""
-    # One extra layer vs earlier revisions: final integers are huge but still feasible with memo.
-    levels = 13
+    # Depth is capped so JSON output stays under Python 3.13's default int→str limit (~4300 digits)
+    # inside json.dump; 13+ layers overflow that limit. sys.set_int_max_str_digits is not an option
+    # in evaluate.py because `sys` is a forbidden import.
+    levels = 12
     graph = _build_nested_mul_diamond(levels)
     assign = {"vars": {}}
     expected = _nested_mul_diamond_expected(levels)
@@ -562,7 +564,7 @@ def test_nested_mul_diamond_memo_required():
         gp, ap, op = td / "g.json", td / "a.json", td / "o.json"
         gp.write_text(json.dumps(graph), encoding="utf-8")
         ap.write_text(json.dumps(assign), encoding="utf-8")
-        data = _run_evaluate(gp, ap, op, timeout_sec=72.0)
+        data = _run_evaluate(gp, ap, op, timeout_sec=65.0)
     got = Fraction(int(data["num"]), int(data["den"]))
     assert got == expected, f"expected {expected} got {got}"
     _assert_reduced(int(data["num"]), int(data["den"]))
