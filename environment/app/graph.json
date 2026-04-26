@@ -1,0 +1,14 @@
+{
+  "root": "n_root",
+  "nodes": {
+    "n_a": {"kind": "var", "name": "a"},
+    "n_b": {"kind": "var", "name": "b"},
+    "n_sum": {"kind": "add", "left": "n_a", "right": "n_b"},
+    "n_sq": {"kind": "mul", "left": "n_sum", "right": "n_sum"},
+    "n_c": {"kind": "const", "num": 2, "den": 7},
+    "n_main": {"kind": "sub", "left": "n_sq", "right": "n_c"},
+    "n_four": {"kind": "const", "num": 4, "den": 1},
+    "n_inv4": {"kind": "inv", "child": "n_four"},
+    "n_root": {"kind": "mul", "left": "n_main", "right": "n_inv4"}
+  }
+}
