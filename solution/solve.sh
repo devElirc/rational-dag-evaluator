@@ -84,6 +84,19 @@ def rat_ceil(n: int, d: int) -> tuple[int, int]:
     return rat_neg(fn, fd)
 
 
+def rat_trunc(n: int, d: int) -> tuple[int, int]:
+    assert d > 0
+    if n >= 0:
+        return norm(n // d, 1)
+    return norm(-((-n) // d), 1)
+
+
+def rat_sgn(n: int, d: int) -> tuple[int, int]:
+    if n == 0:
+        return 0, 1
+    return norm(1 if n > 0 else -1, 1)
+
+
 class Evaluator:
     def __init__(self, nodes: dict[str, Any], root: str, vars_: dict[str, dict[str, int]]):
         self.nodes = nodes
@@ -136,6 +149,12 @@ class Evaluator:
         elif k == "ceil":
             a, b = self.eval_node(n["child"])
             out = rat_ceil(a, b)
+        elif k == "trunc":
+            a, b = self.eval_node(n["child"])
+            out = rat_trunc(a, b)
+        elif k == "sgn":
+            a, b = self.eval_node(n["child"])
+            out = rat_sgn(a, b)
         else:
             raise ValueError(f"unknown kind {k!r}")
         self.memo[nid] = out

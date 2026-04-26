@@ -16,9 +16,10 @@ tags = [
     "exact-arithmetic",
     "graph-traversal",
     "rational-ordering",
+    "sign-truncation",
 ]
-expert_time_estimate_min = 420
-junior_time_estimate_min = 960
+expert_time_estimate_min = 480
+junior_time_estimate_min = 1080
 
 [verifier]
 timeout_sec = 720.0

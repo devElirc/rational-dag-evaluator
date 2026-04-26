@@ -1,25 +1,27 @@
-Imagine a tiny spreadsheet nobody ever shipped the UI for: a directed acyclic graph where each cell is either a rational constant, a variable, or a small set of operations. Nothing becomes a float—every intermediate stays as an integer numerator over a strictly positive integer denominator, and you are expected to cancel common factors as you go so the numbers stay manageable when the harness throws big graphs at you.
+Picture a spreadsheet that never shipped: a directed acyclic graph of little cells, each one either a rational constant, a variable name, or one of a handful of operations. There are no floats anywhere in the story. Every value lives as an integer numerator over a strictly positive integer denominator, and you are supposed to keep cancelling gcds as you walk the graph so the integers do not explode when the tests throw large, tangled examples at you.
 
-You get two JSON files under `/app/`. `graph.json` names a `root` node id and a `nodes` map. Each node has a `kind`:
+You work from two JSON files in `/app/`. `graph.json` points at a `root` id and a `nodes` table keyed by id. Each row has a `kind` that tells you what to do.
 
-Constants (`const`) carry integer `num` and `den` with `den > 0`; the pair need not already be reduced, and `num` may be negative. Variables (`var`) carry a `name` string; look it up under `vars` in `assignment.json`, where every binding is again `{"num": ..., "den": ...}` with a positive denominator (also not guaranteed pre-reduced).
+Constants are `const` rows with integer `num` and `den` where `den` is already positive; the fraction might still be sloppy (not reduced) and the numerator may be negative. Variables are `var` rows with a `name`; resolve that name inside `assignment.json` under `vars`, where each entry again looks like `{"num": ..., "den": ...}` with a positive denominator and no promise of being reduced.
 
-Binary nodes `add`, `sub`, and `mul` point to `left` and `right` child ids. Unary `neg` flips the sign. Unary `inv` takes the reciprocal; inputs are always valid, so you will never invert an expression that evaluates to zero. Unary `abs` sends a rational to its distance from zero on the number line—think `abs(-15/6)` ending up as the reduced `5/2`.
+The usual binary arithmetic nodes are `add`, `sub`, and `mul`, each with `left` and `right` ids. Unary `neg` negates. Unary `inv` reciprocates; the inputs are always valid, so you never reciprocate a value that is exactly zero. Unary `abs` is distance from zero on the line, so after reduction you end up with a non-negative numerator—`abs(-15/6)` should land on `5/2`.
 
-`min` and `max` compare two children in the usual order on the rationals. With both denominators positive, compare `n1/d1` and `n2/d2` by cross-multiplying with integers (`n1*d2` versus `n2*d1`) and **do not** cast to float. If the two values tie, you may return either side’s value, but the pair you write must still be the canonical reduced fraction for that rational.
+`min` and `max` pick the smaller or larger rational in the ordinary order on ℚ. Compare two reduced-or-not values with positive denominators by integer cross products `n1*d2` against `n2*d1`, never by casting to float. If the two sides tie, either branch is fine as long as you still emit the canonical reduced pair for that single rational value.
 
-`floor` and `ceil` are unary. They round toward negative or positive infinity, and the answer is always an integer expressed as a reduced rational with denominator `1`—for instance `floor(-7/3)` is `-3` and `ceil(-7/3)` is `-2`. Stay in integer land; if it helps, `ceil(x) = -floor(-x)` is a dependable identity to implement.
+Rounding comes in several flavours, all unary on a `child` id, and every answer that is “an integer” is written as a reduced rational with denominator `1`. `floor` heads toward negative infinity and `ceil` toward positive infinity, so `floor(-7/3)` is `-3` while `ceil(-7/3)` is `-2`. A handy trick if you implement one first is `ceil(x) = -floor(-x)`, still using only integers.
 
-The graph may fan back into the same node id from more than one parent. Treat each id as a single memoized value once you know it, or you will redo work exponentially on the hidden stress pattern even though the JSON stays small.
+`trunc` chops toward zero, not toward negative infinity. The same `-7/3` example makes the point: `trunc(-7/3)` is `-2`, which is already different from `floor(-7/3)`. Finally, `sgn` reads the sign of its child and answers with exactly one of the reduced rationals `-1/1`, `0/1`, or `1/1`.
 
-Ship `/app/evaluate.py` that reads the graph and assignment, evaluates `root`, and writes `/app/result.json` as exactly `{"num": <int>, "den": <int>}`—no extra keys—with `den > 0`, `gcd(abs(num), den) == 1`, and any negative sign carried on `num`.
+The graph may wire the same node id into more than one parent. Cache each id’s value the first time you finish it; otherwise the hidden nested pattern revisits the same tiny subgraph an obscene number of times and your program will crawl even though the JSON file still looks modest.
 
-Command line shape:
+What you ship is `/app/evaluate.py`. It reads the graph and assignment, evaluates `root`, and writes `/app/result.json` containing only `{"num": <int>, "den": <int>}` with no extra keys, `den` positive, `gcd(abs(num), den) == 1`, and any negative sign parked on `num`.
+
+Run it like this:
 
 `python3 /app/evaluate.py [--graph PATH] [--assignment PATH] [--output PATH]`
 
-If you omit the flags, default to `/app/graph.json`, `/app/assignment.json`, and `/app/result.json`. The bundled files are only a sanity check; the grader also runs large random DAGs, long cancellation chains, and the nested memo torture case, so reduction habits and memoization matter in practice.
+With no flags, read `/app/graph.json` and `/app/assignment.json` and write `/app/result.json`. The checked-in graph is just a smoke test; behind the scenes there are long cancellation chains, big random mixes of every operator above (including `trunc` and `sgn` next to `inv`, ordering, and the infinity-rounding pair), and the nested memo stress case, so sloppy reduction or the wrong flavour of rounding will show up quickly.
 
-Standard library only, but the checker parses your file: any `import` / `from … import` whose top-level module name is `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` will fail you (so `from fractions import Fraction` is out for the same reason). Do not call `eval`, `exec`, `compile`, or `__import__` by bare name anywhere in the module. `math.gcd` is fair game for reduction.
+Stick to the standard library, but know that the grader walks the AST: importing any of `fractions`, `decimal`, `numpy`, `sympy`, `gmpy2`, `importlib`, `inspect`, `ctypes`, `subprocess`, `multiprocessing`, `pickle`, `marshal`, `os`, `builtins`, `types`, `code`, `sqlite3`, `zlib`, `base64`, `ssl`, or `socket` as the top-level name in `import` / `from … import` will fail you, and so will bare calls to `eval`, `exec`, `compile`, or `__import__`. `math.gcd` is explicitly allowed for reduction.
 
-If you can run the script with defaults, delete nothing critical from your logic when the graph grows, and still match the oracle on weird mixes of `inv`, ordering, and rounding, you are in the right neighborhood.
+If the default run still prints the bundled answer, the big random trials still agree with the reference, and nothing blows up when the graph deepens, you are pointed the right way.
